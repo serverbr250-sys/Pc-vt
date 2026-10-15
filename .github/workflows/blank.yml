@@ -1,330 +1,43 @@
 
-import os
-import shutil
-import subprocess
-import threading
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+#!/usr/bin/env bash
+set -euo pipefail
 
-APP_NAME = "Virtual Gaming PC"
+if [[ $EUID -ne 0 ]]; then
+    echo "Execute: sudo bash install_host.sh"
+    exit 1
+fi
 
-# Configuração padrão da máquina virtual
-RAM_GB = 16
-CPU_CORES = 8
-DISK_GB = 256
+export DEBIAN_FRONTEND=noninteractive
 
-BASE_DIR = os.path.abspath("VirtualGamingPC")
-DISK_PATH = os.path.join(BASE_DIR, "windows_virtual.qcow2")
-CONFIG_PATH = os.path.join(BASE_DIR, "windows_iso.txt")
+apt-get update
+apt-get install -y \
+    qemu-system-x86 \
+    qemu-utils \
+    ovmf \
+    swtpm \
+    python3 \
+    python3-venv \
+    curl \
+    ca-certificates \
+    ufw
 
+# Instala o Tailscale pelo instalador oficial.
+curl -fsSL https://tailscale.com/install.sh -o /tmp/tailscale-install.sh
+bash /tmp/tailscale-install.sh
+rm -f /tmp/tailscale-install.sh
 
-def find_program(names):
-    """Procura um executável instalado no sistema."""
-    for name in names:
-        path = shutil.which(name)
-        if path:
-            return path
-    return None
+# Permite VNC apenas pela interface privada Tailscale.
+ufw allow in on tailscale0 to any port 5901 proto tcp
+ufw deny 5901/tcp
 
+mkdir -p /opt/virtual-gaming-pc
+chmod 755 /opt/virtual-gaming-pc
 
-class VirtualPC:
-    def __init__(self, root):
-        self.root = root
-        self.root.title(APP_NAME)
-        self.root.geometry("650x590")
-        self.root.minsize(520, 500)
-
-        os.makedirs(BASE_DIR, exist_ok=True)
-
-        self.iso_path = tk.StringVar(value=self.load_iso())
-        self.ram = tk.StringVar(value=str(RAM_GB))
-        self.cpus = tk.StringVar(value=str(CPU_CORES))
-        self.disk_size = tk.StringVar(value=str(DISK_GB))
-        self.status = tk.StringVar(value="Pronto")
-
-        self.qemu_path = find_program([
-            "qemu-system-x86_64",
-            "qemu-system-x86_64.exe"
-        ])
-        self.qemu_img_path = find_program([
-            "qemu-img", "qemu-img.exe"
-        ])
-
-        self.build_ui()
-        self.update_disk_status()
-
-    def load_iso(self):
-        try:
-            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-                path = f.read().strip()
-                if os.path.isfile(path):
-                    return path
-        except OSError:
-            pass
-        return ""
-
-    def save_iso(self):
-        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-            f.write(self.iso_path.get().strip())
-
-    def build_ui(self):
-        main = ttk.Frame(self.root, padding=20)
-        main.pack(fill="both", expand=True)
-
-        ttk.Label(
-            main, text="VIRTUAL GAMING PC",
-            font=("Arial", 20, "bold")
-        ).pack(pady=(0, 5))
-
-        ttk.Label(
-            main,
-            text="Máquina virtual configurada para Windows"
-        ).pack(pady=(0, 16))
-
-        ttk.Label(main, text="ISO de instalação do Windows").pack(
-            anchor="w"
-        )
-
-        iso_frame = ttk.Frame(main)
-        iso_frame.pack(fill="x", pady=5)
-
-        ttk.Entry(
-            iso_frame, textvariable=self.iso_path
-        ).pack(side="left", fill="x", expand=True)
-
-        ttk.Button(
-            iso_frame, text="Procurar...",
-            command=self.select_iso
-        ).pack(side="left", padx=(6, 0))
-
-        settings = ttk.LabelFrame(
-            main, text="Configuração do PC virtual", padding=12
-        )
-        settings.pack(fill="x", pady=12)
-
-        ttk.Label(settings, text="RAM (GB):").grid(
-            row=0, column=0, sticky="w", pady=5
-        )
-        ttk.Label(
-            settings, text="16 GB",
-            font=("Arial", 10, "bold")
-        ).grid(row=0, column=1, sticky="w", padx=10)
-
-        ttk.Label(settings, text="Núcleos de CPU:").grid(
-            row=1, column=0, sticky="w", pady=5
-        )
-        ttk.Label(
-            settings, text="8 núcleos",
-            font=("Arial", 10, "bold")
-        ).grid(row=1, column=1, sticky="w", padx=10)
-
-        ttk.Label(settings, text="Disco virtual:").grid(
-            row=2, column=0, sticky="w", pady=5
-        )
-        ttk.Label(
-            settings, text="256 GB (máximo)",
-            font=("Arial", 10, "bold")
-        ).grid(row=2, column=1, sticky="w", padx=10)
-
-        ttk.Button(
-            main, text="1. Verificar instalação",
-            command=self.check_installation
-        ).pack(fill="x", pady=4)
-
-        ttk.Button(
-            main, text="2. Criar disco virtual",
-            command=self.create_disk
-        ).pack(fill="x", pady=4)
-
-        ttk.Button(
-            main, text="3. Instalar Windows pela ISO",
-            command=self.install_windows
-        ).pack(fill="x", pady=4)
-
-        ttk.Button(
-            main, text="4. Iniciar Windows instalado",
-            command=self.start_installed
-        ).pack(fill="x", pady=4)
-
-        ttk.Button(
-            main, text="Abrir pasta do projeto",
-            command=self.open_folder
-        ).pack(fill="x", pady=4)
-
-        ttk.Separator(main).pack(fill="x", pady=12)
-
-        ttk.Label(
-            main, textvariable=self.status,
-            wraplength=570
-        ).pack(anchor="w")
-
-        self.disk_label = ttk.Label(main, text="")
-        self.disk_label.pack(anchor="w", pady=(5, 0))
-
-    def select_iso(self):
-        path = filedialog.askopenfilename(
-            title="Selecione a ISO do Windows",
-            filetypes=[
-                ("Imagens ISO", "*.iso"),
-                ("Todos os arquivos", "*.*")
-            ]
-        )
-        if path:
-            self.iso_path.set(path)
-            self.save_iso()
-            self.status.set("ISO selecionada.")
-
-    def check_installation(self):
-        missing = []
-
-        if not self.qemu_path:
-            missing.append("qemu-system-x86_64")
-        if not self.qemu_img_path:
-            missing.append("qemu-img")
-
-        if missing:
-            messagebox.showwarning(
-                "QEMU não encontrado",
-                "Instale o QEMU e adicione a pasta de executáveis "
-                "ao PATH do sistema.\n\nFaltando: " + ", ".join(missing)
-            )
-            self.status.set("Instalação do QEMU necessária.")
-            return
-
-        try:
-            result = subprocess.run(
-                [self.qemu_path, "--version"],
-                capture_output=True, text=True, timeout=10
-            )
-            version = (result.stdout or result.stderr).splitlines()
-            detail = version[0] if version else "Versão não identificada"
-
-            messagebox.showinfo(
-                "Verificação",
-                "QEMU encontrado!\n" + detail +
-                "\n\nqemu-img: " + self.qemu_img_path
-            )
-            self.status.set("QEMU encontrado.")
-        except (OSError, subprocess.SubprocessError) as exc:
-            messagebox.showerror("Erro", str(exc))
-
-    def update_disk_status(self):
-        if os.path.isfile(DISK_PATH):
-            size = os.path.getsize(DISK_PATH) / (1024 ** 3)
-            self.disk_label.config(
-                text=f"Disco existente: {size:.2f} GB ocupados no arquivo"
-            )
-        else:
-            self.disk_label.config(text="Disco virtual ainda não criado.")
-
-    def create_disk(self):
-        if not self.qemu_img_path:
-            messagebox.showerror(
-                "QEMU ausente",
-                "Instale o QEMU e verifique a instalação primeiro."
-            )
-            return
-
-        if os.path.exists(DISK_PATH):
-            if not messagebox.askyesno(
-                "Disco existente",
-                "Já existe um disco virtual. Deseja mantê-lo?\n\n"
-                "Clique em Sim para manter o disco. "
-                "Clique em Não para cancelar."
-            ):
-                return
-
-            messagebox.showinfo(
-                "Disco preservado",
-                "O disco existente foi mantido para evitar perda de dados."
-            )
-            return
-
-        try:
-            result = subprocess.run(
-                [
-                    self.qemu_img_path, "create",
-                    "-f", "qcow2", DISK_PATH,
-                    f"{self.disk_size.get()}G"
-                ],
-                capture_output=True, text=True, timeout=60
-            )
-
-            if result.returncode != 0:
-                raise RuntimeError(result.stderr or "Falha ao criar disco.")
-
-            self.update_disk_status()
-            self.status.set("Disco virtual criado com sucesso.")
-            messagebox.showinfo(
-                "Sucesso",
-                f"Disco criado:\n{DISK_PATH}\n\n"
-                "O arquivo cresce conforme os dados são gravados."
-            )
-        except (OSError, subprocess.SubprocessError, RuntimeError) as exc:
-            messagebox.showerror("Erro ao criar disco", str(exc))
-
-    def build_command(self, with_iso):
-        if not self.qemu_path:
-            raise RuntimeError("QEMU não encontrado.")
-
-        if not os.path.isfile(DISK_PATH):
-            raise RuntimeError(
-                "Crie o disco virtual antes de iniciar o PC."
-            )
-
-        command = [
-            self.qemu_path,
-            "-machine", "q35",
-            "-m", f"{self.ram.get()}G",
-            "-smp", self.cpus.get(),
-            "-drive", f"file={DISK_PATH},format=qcow2,if=ide",
-            "-nic", "user,model=e1000",
-            "-vga", "std",
-            "-display", "default",
-            "-boot", "menu=on"
-        ]
-
-        if with_iso:
-            iso = self.iso_path.get().strip()
-
-            if not iso or not os.path.isfile(iso):
-                raise RuntimeError(
-                    "Selecione uma ISO válida do Windows."
-                )
-
-            self.save_iso()
-            command.extend([
-                "-cdrom", iso,
-                "-boot", "order=d,menu=on"
-            ])
-
-        return command
-
-    def launch(self, with_iso):
-        try:
-            command = self.build_command(with_iso)
-
-            warning = (
-                "A VM tentará usar 16 GB de RAM e 8 núcleos. "
-                "Confirme que o computador tem recursos disponíveis."
-            )
-
-            if not messagebox.askyesno("Iniciar PC virtual", warning):
-                return
-
-            subprocess.Popen(command, cwd=BASE_DIR)
-            self.status.set("Comando enviado para iniciar a máquina.")
-        except (OSError, RuntimeError, ValueError) as exc:
-            messagebox.showerror("Não foi possível iniciar", str(exc))
-            self.status.set("Falha ao iniciar a máquina virtual.")
-
-    def install_windows(self):
-        if not self.iso_path.get().strip():
-            self.select_iso()
-        if self.iso_path.get().strip():
-            self.launch(with_iso=True)
-
-    def start_installed(self):
+echo
+echo "Instalação concluída."
+echo "Agora execute: sudo tailscale up"
+echo "Confira a GPU e a virtualização antes de criar a VM."
+_installed(self):
         self.launch(with_iso=False)
 
     def open_folder(self):
