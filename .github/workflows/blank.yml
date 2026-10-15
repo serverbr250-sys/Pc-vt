@@ -1,0 +1,57 @@
+import subprocess
+import threading
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
+from pathlib import Path
+
+APP_NAME = "PC Virtual Gamer"
+DEFAULT_NAME = "PC Virtual Gamer"
+DEFAULT_RAM = 16000
+DEFAULT_CPUS = 16
+DEFAULT_DISK = 500
+DEFAULT_VRAM = 128
+
+
+def find_vboxmanage():
+    paths = [
+        Path(r"C:\Program Files\Oracle\VirtualBox\VBoxManage.exe"),
+        Path(r"C:\Program Files\VirtualBox\VBoxManage.exe"),
+    ]
+
+    for path in paths:
+        if path.exists():
+            return str(path)
+
+    return "VBoxManage"
+
+
+class PCVirtualGamer:
+
+    def __init__(self, root):
+        self.root = root
+        self.root.title(APP_NAME)
+        self.root.geometry("720x590")
+        self.root.minsize(650, 520)
+
+        self.vbox = tk.StringVar(value=find_vboxmanage())
+        self.name = tk.StringVar(value=DEFAULT_NAME)
+        self.ram = tk.StringVar(value=str(DEFAULT_RAM))
+        self.cpus = tk.StringVar(value=str(DEFAULT_CPUS))
+        self.disk = tk.StringVar(value=str(DEFAULT_DISK))
+        self.iso = tk.StringVar(value="")
+
+        self.build_interface()
+
+    def build_interface(self):
+        main = ttk.Frame(self.root, padding=15)
+        main.pack(fill="both", expand=True)
+
+        ttk.Label(
+            main,
+            text="PC VIRTUAL GAMER",
+            font=("Segoe UI", 20, "bold")
+        ).pack(anchor="w")
+
+        ttk.Label(
+            main,
+            text="Gerenciador de PC virtual Windows",
